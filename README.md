@@ -33,16 +33,13 @@
 Для работы скрипта требуется установленный **Python 3.8** или новее.
 
 1. Убедитесь, что у вас установлен менеджер пакетов `pip`.
-2. В папке со скриптом создайте файл `requirements.txt` со следующим содержимым:
-   ```text
-   pandas>=2.0.0
-   matplotlib>=3.7.0
-   scipy>=1.10.0
-   ```
-3. Откройте терминал (командную строку) в папке со скриптом и выполните команду:
+2. Откройте терминал (командную строку) в папке со скриптом и выполните команду:
    ```bash
    pip install -r requirements.txt
    ```
+   (файл `requirements.txt` уже входит в поставку: `pandas`, `matplotlib`)
+
+Либо запустите `install_requirements.bat` (Windows).
 
 ---
 
@@ -52,48 +49,49 @@
 ```bash
 python telemetry_analyzer.py <путь_к_файлу.csv> [необязательные аргументы]
 ```
+CSV-файлы телеметрии по умолчанию лежат в папке `data/`.
 
 ### Режимы запуска (Примеры)
 
 **1. Стандартный запуск (для VW Polo Sedan)**
 Показывает все найденные в логе круги. Используются стандартные параметры VW Polo. На графиках будет отображена только мощность двигателя.
 ```bash
-python telemetry_analyzer.py session_20260718_122333_autodrom_gai_laps3-4_v3.csv
+python telemetry_analyzer.py data/session_20260718_122333_autodrom_gai_laps3-4_v3.csv
 ```
 
 **2. Анализ конкретных кругов**
 Если вы хотите сравнить только 2-й и 3-й круги, используйте аргумент `--laps`. Остальные круги будут скрыты.
 ```bash
-python telemetry_analyzer.py session.csv --laps 2 3
+python telemetry_analyzer.py data/session.csv --laps 2 3
 ```
 
 **3. Расчет момента на коленчатом валу двигателя**
 Для появления 5-го графика (Момент двигателя, Нм) скрипту нужно знать передаточное число передачи, на которой вы ехали большую часть круга. 
 Для VW Polo 1.6 на 3-й передаче (1.229 КПП * 4.064 Главная пара ≈ 5.0):
 ```bash
-python telemetry_analyzer.py session.csv --gear_ratio 5.0
+python telemetry_analyzer.py data/session.csv --gear_ratio 5.0
 ```
 Проще использовать профиль автомобиля — в `cars/vw_polo_sedan_16.ini` это значение уже указано:
 ```bash
-python telemetry_analyzer.py session.csv --car cars/vw_polo_sedan_16.ini
+python telemetry_analyzer.py data/session.csv --car cars/vw_polo_sedan_16.ini
 ```
 
 **4. Указание данных заезда (пилот, трасса, погода)**
 Вы можете добавить информацию о заезде, которая будет выведена на первую страницу PDF-отчета.
 ```bash
-python telemetry_analyzer.py session.csv --driver "Алексей" --track "Нижегородское кольцо" --weather "Дождь"
+python telemetry_analyzer.py data/session.csv --driver "Алексей" --track "Нижегородское кольцо" --weather "Дождь"
 ```
 
 **5. Настройка сглаживания графиков**
 Если графики мощности и момента кажутся вам слишком зашумленными (или наоборот, слишком сглаженными), вы можете изменить окно сглаживания в секундах. По умолчанию используется 0.8 секунды.
 ```bash
-python telemetry_analyzer.py session.csv --gear_ratio 5.0 --smooth_time 1.5
+python telemetry_analyzer.py data/session.csv --gear_ratio 5.0 --smooth_time 1.5
 ```
 
 **6. Переопределение отдельного параметра из профиля**
 Если указан и `--car`, и отдельный флаг (например `--mass`), приоритет у флага. Так можно разово поехать с пассажиром, не редактируя файл профиля:
 ```bash
-python telemetry_analyzer.py session.csv --car cars/vw_polo_sedan_16.ini --mass 1400
+python telemetry_analyzer.py data/session.csv --car cars/vw_polo_sedan_16.ini --mass 1400
 ```
 
 ---
@@ -191,6 +189,30 @@ python telemetry_analyzer.py session.csv --car cars/vw_polo_sedan_16.ini
 
 ## 📄 PDF-отчет
 
-Рядом с обрабатываемым CSV-файлом автоматически создается PDF-документ (например, `Отчет_session_20260718_122333.pdf`).
+Все отчеты автоматически сохраняются в папку `reports/` проекта (например, `reports/Отчет_session_20260718_122333.pdf`); папка создается при первом запуске.
 * **Страница 1:** Титульный лист с указанием исходного файла, даты, информации о заезде (трасса, пилот, погода), времен кругов, вычисленной частоты датчиков, введенных параметров автомобиля, предупреждения о корректности расчетов и методологии.
 * **Страницы 2+:** Графики в высоком качестве с минимальными полями, готовые для отправки инженеру или распечатки.
+
+---
+
+## 🗂 Структура проекта
+
+```
+telemetry-scan/
+├── telemetry_analyzer.py   # точка входа CLI (аргументы командной строки)
+├── telemetry_app.py        # точка входа GUI (Tkinter)
+├── car_profile.py          # загрузка профилей автомобилей (cars/*.ini)
+├── lib/                    # библиотека анализа телеметрии
+│   ├── config.py           #   AnalysisConfig — параметры анализа + валидация
+│   ├── telemetry_io.py     #   чтение лога RaceChrono, круги, пиковые показатели
+│   ├── physics.py          #   сглаживание, силы, мощность, момент
+│   ├── plots.py            #   построение 5 графиков
+│   ├── report.py           #   формирование PDF-отчета
+│   ├── analysis.py         #   run_analysis — полный цикл
+│   └── paths.py            #   пути к data/ и reports/
+├── cars/                   # профили автомобилей (.ini) + _template.ini
+├── data/                   # CSV-файлы телеметрии RaceChrono
+└── reports/                # сгенерированные PDF-отчеты
+```
+
+Логика анализа реализована один раз в `lib/` и используется обеими точками входа (CLI и GUI). Профили автомобилей не зависят от кода: добавить машину — значит добавить `.ini` файл в `cars/`.
