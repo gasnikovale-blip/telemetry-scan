@@ -19,7 +19,7 @@ class TelemetryApp:
         self.root = root
         self.root.title("Анализатор телеметрии RaceChrono")
         self.root.geometry("1280x960")
-        self.root.minsize(1024, 720)
+        self.root.minsize(1024, 950)   # ниже контент (группы + список кругов) перестает влезать
         self.root.resizable(True, True)
 
         # Переменные
@@ -83,7 +83,9 @@ class TelemetryApp:
 
         canvas_row = ttk.Frame(laps_frame)
         canvas_row.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-        self.laps_canvas = tk.Canvas(canvas_row, highlightthickness=0)
+        # height=100: минимальная запрашиваемая высота (по умолчанию Canvas требует ~265px
+        # и выдавливает остальные группы за край окна); expand=True отдает ему остаток
+        self.laps_canvas = tk.Canvas(canvas_row, highlightthickness=0, height=100)
         self.laps_scrollbar = ttk.Scrollbar(canvas_row, orient=tk.VERTICAL, command=self.laps_canvas.yview)
         self.laps_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.laps_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -107,13 +109,14 @@ class TelemetryApp:
         car_frame = ttk.LabelFrame(main_frame, text="Параметры автомобиля", padding=10)
         car_frame.pack(fill=tk.X, pady=5)
         car_frame.columnconfigure(1, weight=1)
+        car_frame.columnconfigure(3, weight=1)
 
         ttk.Label(car_frame, text="Профиль:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.car_combo = ttk.Combobox(car_frame, textvariable=self.car_var, state="readonly")
-        self.car_combo.grid(row=0, column=1, sticky="ew", pady=2)
+        self.car_combo.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
         self.car_combo.bind("<<ComboboxSelected>>", self.on_car_selected)
         ttk.Button(car_frame, text="Обновить список", command=self.refresh_car_profiles).grid(
-            row=0, column=2, padx=(5, 0), sticky=tk.W)
+            row=0, column=4, padx=(5, 0), sticky=tk.W)
         self.refresh_car_profiles()
 
         fields = [
@@ -123,13 +126,16 @@ class TelemetryApp:
             ("Сглаживание (сек):", self.smooth_time)
         ]
 
-        for i, (label, var) in enumerate(fields, start=1):
-            ttk.Label(car_frame, text=label).grid(row=i, column=0, sticky=tk.W, pady=2)
-            ttk.Entry(car_frame, textvariable=var, width=15).grid(row=i, column=1, sticky="ew", pady=2)
+        # По два поля в строку — группа не растягивается вниз и не выдавливает остальное
+        for i in range(0, len(fields), 2):
+            row = i // 2 + 1
+            for col, (label, var) in enumerate(fields[i:i + 2]):
+                ttk.Label(car_frame, text=label).grid(row=row, column=col * 2, sticky=tk.W, pady=2, padx=(20, 5))
+                ttk.Entry(car_frame, textvariable=var, width=15).grid(row=row, column=col * 2 + 1, sticky="ew", pady=2)
 
         # Кнопка запуска
         run_btn = ttk.Button(main_frame, text="Анализировать и построить графики", command=self.run_analysis)
-        run_btn.pack(pady=20)
+        run_btn.pack(pady=(12, 4))
 
         # Статус
         self.status_label = ttk.Label(main_frame, text="Готово к работе", font=("Arial", 10, "italic"))
@@ -244,16 +250,15 @@ class TelemetryApp:
             foreground="grey"
         )
 
-        # Таблица: 6 фиксированных колонок, при нехватке места — прокрутка вниз
+        # Один столбец: круги идут сверху вниз, при нехватке места — прокрутка
         for i, lap in enumerate(all_laps):
             var = tk.BooleanVar(value=True)   # по умолчанию все отмечены (= текущее поведение «все круги»)
             self._lap_vars[int(lap)] = var
-            row, col = divmod(i, 6)
             cell = ttk.Frame(self.laps_table)
-            cell.grid(row=row, column=col, sticky=tk.W, padx=(0, 15), pady=2)
+            cell.grid(row=i, column=0, sticky=tk.W, pady=1)
             ttk.Checkbutton(cell, text=f"Круг {int(lap)}", variable=var).pack(side=tk.LEFT)
             ttk.Label(cell, text=format_lap_time(lap_times.get(lap, float("nan"))),
-                      foreground="grey").pack(side=tk.LEFT, padx=(4, 0))
+                      foreground="grey").pack(side=tk.LEFT, padx=(12, 0))
 
         self.root.update_idletasks()
         self._on_laps_table_configure(None)
