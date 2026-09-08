@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from car_profile import MANUAL, CarProfileError, list_car_profiles, load_car_profile
-from lib import AnalysisConfig, parse_laps_spec, run_analysis
+from lib import AnalysisConfig, run_analysis
+from lib.telemetry_io import compute_lap_times, format_lap_time, read_telemetry
 
 
 # ==========================================
@@ -22,7 +23,6 @@ class TelemetryApp:
 
         # Переменные
         self.filepath = tk.StringVar()
-        self.laps = tk.StringVar()
         self.mass = tk.DoubleVar(value=1250)
         self.cd_a = tk.DoubleVar(value=0.65)
         self.crr = tk.DoubleVar(value=0.012)
@@ -33,6 +33,9 @@ class TelemetryApp:
         self.driver = tk.StringVar()
         self.track = tk.StringVar(value="Автодром Санкт-Петербург")
         self.weather = tk.StringVar(value="Сухо")
+
+        # Таблица кругов (заполняется после выбора файла)
+        self._lap_vars = {}    # номер круга -> tk.BooleanVar (чекбокс)
 
         # Профиль автомобиля (выпадающий список)
         self.car_var = tk.StringVar(value=MANUAL)
@@ -52,24 +55,41 @@ class TelemetryApp:
         # Выбор файла
         file_frame = ttk.LabelFrame(main_frame, text="Файл лога RaceChrono", padding=10)
         file_frame.pack(fill=tk.X, pady=5)
-        ttk.Entry(file_frame, textvariable=self.filepath, width=45).pack(side=tk.LEFT, padx=(0, 5))
+        path_entry = ttk.Entry(file_frame, textvariable=self.filepath, width=45)
+        path_entry.pack(side=tk.LEFT, padx=(0, 5))
+        path_entry.bind("<FocusOut>", lambda e: self.refresh_laps_table())
+        path_entry.bind("<Return>", lambda e: self.refresh_laps_table())
         ttk.Button(file_frame, text="Обзор...", command=self.browse_file).pack(side=tk.LEFT)
 
         # Параметры заезда
         session_frame = ttk.LabelFrame(main_frame, text="Параметры заезда", padding=10)
         session_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(session_frame, text="Круги (через запятую, пусто = все):").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.laps, width=30).grid(row=0, column=1, pady=2)
-
-        ttk.Label(session_frame, text="Пилот:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(session_frame, text="Пилот:").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Entry(session_frame, textvariable=self.driver, width=30).grid(row=1, column=1, pady=2)
 
-        ttk.Label(session_frame, text="Трасса:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.track, width=30).grid(row=2, column=1, pady=2)
+        ttk.Label(session_frame, text="Трасса:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(session_frame, textvariable=self.track, width=30).grid(row=1, column=1, pady=2)
 
-        ttk.Label(session_frame, text="Погода:").grid(row=3, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.weather, width=30).grid(row=3, column=1, pady=2)
+        ttk.Label(session_frame, text="Погода:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(session_frame, textvariable=self.weather, width=30).grid(row=2, column=1, pady=2)
+
+        # Таблица кругов (появляется после выбора файла)
+        laps_frame = ttk.LabelFrame(main_frame, text="Круги в файле (отметьте нужные)", padding=10)
+        laps_frame.pack(fill=tk.X, pady=5)
+
+        self.laps_hint = ttk.Label(laps_frame, text="Файл не выбран — круги появятся после выбора CSV.",
+                                   foreground="grey")
+        self.laps_hint.pack(anchor=tk.W)
+
+        self.laps_table = ttk.Frame(laps_frame)
+        self.laps_table.pack(fill=tk.X, anchor=tk.W)
+        # Кнопки «Все/Снять» создаются при заполнении таблицы
+        self.laps_buttons = ttk.Frame(laps_frame)
+        self.laps_buttons.pack(anchor=tk.W, pady=(5, 0))
+
+        ttk.Button(self.laps_buttons, text="Отметить все", command=self.check_all_laps).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(self.laps_buttons, text="Снять все", command=self.uncheck_all_laps).pack(side=tk.LEFT)
 
         # Параметры авто
         car_frame = ttk.LabelFrame(main_frame, text="Параметры автомобиля", padding=10)
@@ -158,6 +178,60 @@ class TelemetryApp:
         )
         if filename:
             self.filepath.set(filename)
+            self.refresh_laps_table()
+
+    def refresh_laps_table(self):
+        """Сканирует выбранный файл и строит таблицу кругов с чекбоксами и временами."""
+        for w in self.laps_table.winfo_children():
+            w.destroy()
+        self._lap_vars = {}
+
+        filepath = self.filepath.get().strip()
+        if not filepath:
+            self.laps_hint.config(text="Файл не выбран — круги появятся после выбора CSV.")
+            return
+
+        self.laps_hint.config(text=f"Читаю круги из {filepath}...")
+        self.root.update()
+
+        try:
+            df = read_telemetry(filepath)
+            all_laps, lap_times = compute_lap_times(df)
+        except (FileNotFoundError, ValueError) as e:
+            self.laps_hint.config(text=f"Не удалось прочитать файл: {e}", foreground="red")
+            self.laps_buttons.pack_forget()
+            return
+
+        self.laps_hint.config(
+            text=f"Найдено кругов: {len(all_laps)}. Отметьте интересные — неотмеченные будут скрыты на графиках.",
+            foreground="grey"
+        )
+        self.laps_buttons.pack(anchor=tk.W, pady=(5, 0))
+
+        # Таблица: строки по кругам, до 8 колонок с переносом
+        for i, lap in enumerate(all_laps):
+            var = tk.BooleanVar(value=True)   # по умолчанию все отмечены (= текущее поведение «все круги»)
+            self._lap_vars[int(lap)] = var
+            row, col = divmod(i, 8)
+            cell = ttk.Frame(self.laps_table)
+            cell.grid(row=row, column=col, sticky=tk.W, padx=(0, 15), pady=2)
+            ttk.Checkbutton(cell, text=f"Круг {int(lap)}", variable=var).pack(side=tk.LEFT)
+            ttk.Label(cell, text=format_lap_time(lap_times.get(lap, float("nan"))),
+                      foreground="grey").pack(side=tk.LEFT, padx=(4, 0))
+
+    def check_all_laps(self):
+        for var in self._lap_vars.values():
+            var.set(True)
+
+    def uncheck_all_laps(self):
+        for var in self._lap_vars.values():
+            var.set(False)
+
+    def selected_laps(self):
+        """Список отмеченных кругов; None = таблица еще не построена (файл не выбран)."""
+        if not self._lap_vars:
+            return None
+        return [lap for lap, var in self._lap_vars.items() if var.get()]
 
     def run_analysis(self):
         filepath = self.filepath.get()
@@ -169,10 +243,14 @@ class TelemetryApp:
         self.root.update()
 
         sel = self.car_var.get()
+        laps = self.selected_laps()
+        if laps == []:
+            messagebox.showwarning("Ошибка", "Отметьте хотя бы один круг в таблице кругов.")
+            return
         try:
             cfg = AnalysisConfig(
                 file_path=filepath,
-                laps=parse_laps_spec(self.laps.get()),
+                laps=laps,
                 mass=self._get_float(self.mass, "Масса (кг)"),
                 cd_a=self._get_float(self.cd_a, "Аэродинамика (Cd*A)"),
                 crr=self._get_float(self.crr, "Коэфф. качения (Crr)"),
