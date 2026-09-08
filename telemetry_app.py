@@ -18,7 +18,8 @@ class TelemetryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Анализатор телеметрии RaceChrono")
-        self.root.geometry("1024x900")
+        self.root.geometry("1280x960")
+        self.root.minsize(1024, 720)
         self.root.resizable(True, True)
 
         # Переменные
@@ -55,51 +56,64 @@ class TelemetryApp:
         # Выбор файла
         file_frame = ttk.LabelFrame(main_frame, text="Файл лога RaceChrono", padding=10)
         file_frame.pack(fill=tk.X, pady=5)
-        path_entry = ttk.Entry(file_frame, textvariable=self.filepath, width=45)
-        path_entry.pack(side=tk.LEFT, padx=(0, 5))
+        file_frame.columnconfigure(0, weight=1)
+        path_entry = ttk.Entry(file_frame, textvariable=self.filepath)
+        path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
         path_entry.bind("<FocusOut>", lambda e: self.refresh_laps_table())
         path_entry.bind("<Return>", lambda e: self.refresh_laps_table())
-        ttk.Button(file_frame, text="Обзор...", command=self.browse_file).pack(side=tk.LEFT)
+        ttk.Button(file_frame, text="Обзор...", command=self.browse_file).grid(row=0, column=1)
 
         # Параметры заезда
         session_frame = ttk.LabelFrame(main_frame, text="Параметры заезда", padding=10)
         session_frame.pack(fill=tk.X, pady=5)
+        session_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(session_frame, text="Пилот:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.driver, width=30).grid(row=1, column=1, pady=2)
+        session_fields = (("Пилот:", self.driver), ("Трасса:", self.track), ("Погода:", self.weather))
+        for row, (label, var) in enumerate(session_fields):
+            ttk.Label(session_frame, text=label).grid(row=row, column=0, sticky=tk.W, pady=2)
+            ttk.Entry(session_frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=2)
 
-        ttk.Label(session_frame, text="Трасса:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.track, width=30).grid(row=1, column=1, pady=2)
-
-        ttk.Label(session_frame, text="Погода:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(session_frame, textvariable=self.weather, width=30).grid(row=2, column=1, pady=2)
-
-        # Таблица кругов (появляется после выбора файла)
+        # Таблица кругов: ширина по канвасу, рост вниз, прокрутка при переполнении
         laps_frame = ttk.LabelFrame(main_frame, text="Круги в файле (отметьте нужные)", padding=10)
-        laps_frame.pack(fill=tk.X, pady=5)
+        laps_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.laps_hint = ttk.Label(laps_frame, text="Файл не выбран — круги появятся после выбора CSV.",
                                    foreground="grey")
-        self.laps_hint.pack(anchor=tk.W)
+        self.laps_hint.pack(anchor=tk.W, fill=tk.X)
 
-        self.laps_table = ttk.Frame(laps_frame)
-        self.laps_table.pack(fill=tk.X, anchor=tk.W)
-        # Кнопки «Все/Снять» создаются при заполнении таблицы
+        canvas_row = ttk.Frame(laps_frame)
+        canvas_row.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        self.laps_canvas = tk.Canvas(canvas_row, highlightthickness=0)
+        self.laps_scrollbar = ttk.Scrollbar(canvas_row, orient=tk.VERTICAL, command=self.laps_canvas.yview)
+        self.laps_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.laps_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Внутренний фрейм таблицы; ширина следует за канвасом
+        self.laps_table = ttk.Frame(self.laps_canvas)
+        self.laps_canvas_window = self.laps_canvas.create_window((0, 0), window=self.laps_table, anchor=tk.NW)
+        self.laps_table.bind("<Configure>", self._on_laps_table_configure)
+        self.laps_canvas.bind("<Configure>", self._on_laps_canvas_configure)
+        # Прокрутка колесом мыши (только когда курсор над списком)
+        self.laps_canvas.bind("<Enter>", lambda e: self._set_laps_wheel(True))
+        self.laps_canvas.bind("<Leave>", lambda e: self._set_laps_wheel(False))
+
+        # Кнопки работы с отметками
         self.laps_buttons = ttk.Frame(laps_frame)
         self.laps_buttons.pack(anchor=tk.W, pady=(5, 0))
-
         ttk.Button(self.laps_buttons, text="Отметить все", command=self.check_all_laps).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(self.laps_buttons, text="Снять все", command=self.uncheck_all_laps).pack(side=tk.LEFT)
 
         # Параметры авто
         car_frame = ttk.LabelFrame(main_frame, text="Параметры автомобиля", padding=10)
         car_frame.pack(fill=tk.X, pady=5)
+        car_frame.columnconfigure(1, weight=1)
 
         ttk.Label(car_frame, text="Профиль:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.car_combo = ttk.Combobox(car_frame, textvariable=self.car_var, state="readonly", width=42)
-        self.car_combo.grid(row=0, column=1, columnspan=2, sticky=tk.W, pady=2)
+        self.car_combo = ttk.Combobox(car_frame, textvariable=self.car_var, state="readonly")
+        self.car_combo.grid(row=0, column=1, sticky="ew", pady=2)
         self.car_combo.bind("<<ComboboxSelected>>", self.on_car_selected)
-        ttk.Button(car_frame, text="Обновить список", command=self.refresh_car_profiles).grid(row=0, column=3, padx=5)
+        ttk.Button(car_frame, text="Обновить список", command=self.refresh_car_profiles).grid(
+            row=0, column=2, padx=(5, 0), sticky=tk.W)
         self.refresh_car_profiles()
 
         fields = [
@@ -111,7 +125,7 @@ class TelemetryApp:
 
         for i, (label, var) in enumerate(fields, start=1):
             ttk.Label(car_frame, text=label).grid(row=i, column=0, sticky=tk.W, pady=2)
-            ttk.Entry(car_frame, textvariable=var, width=15).grid(row=i, column=1, pady=2)
+            ttk.Entry(car_frame, textvariable=var, width=15).grid(row=i, column=1, sticky="ew", pady=2)
 
         # Кнопка запуска
         run_btn = ttk.Button(main_frame, text="Анализировать и построить графики", command=self.run_analysis)
@@ -121,6 +135,30 @@ class TelemetryApp:
         self.status_label = ttk.Label(main_frame, text="Готово к работе", font=("Arial", 10, "italic"))
         self.status_label.pack()
 
+    def _set_laps_wheel(self, enabled):
+        """Включает/выключает прокрутку колесом мыши над списком кругов."""
+        if enabled:
+            self.laps_canvas.bind_all("<MouseWheel>", self._on_laps_wheel)
+            self.laps_canvas.bind_all("<Button-4>", self._on_laps_wheel)
+            self.laps_canvas.bind_all("<Button-5>", self._on_laps_wheel)
+        else:
+            self.laps_canvas.unbind_all("<MouseWheel>")
+            self.laps_canvas.unbind_all("<Button-4>")
+            self.laps_canvas.unbind_all("<Button-5>")
+
+    def _on_laps_wheel(self, event):
+        if event.num == 4 or event.delta > 0:
+            self.laps_canvas.yview_scroll(-1, "units")
+        elif event.num == 5 or event.delta < 0:
+            self.laps_canvas.yview_scroll(1, "units")
+
+    def _on_laps_table_configure(self, event):
+        """Пересчитывает область прокрутки при изменении содержимого таблицы."""
+        self.laps_canvas.configure(scrollregion=self.laps_canvas.bbox("all"))
+
+    def _on_laps_canvas_configure(self, event):
+        """Ширина таблицы следует за шириной канваса — чекбоксы не растягиваются вправо."""
+        self.laps_canvas.itemconfigure(self.laps_canvas_window, width=event.width)
     def refresh_car_profiles(self):
         """Перечитывает папку cars/ и обновляет выпадающий список профилей."""
         self._profile_map = {name: path for path, name in list_car_profiles()}
@@ -199,25 +237,26 @@ class TelemetryApp:
             all_laps, lap_times = compute_lap_times(df)
         except (FileNotFoundError, ValueError) as e:
             self.laps_hint.config(text=f"Не удалось прочитать файл: {e}", foreground="red")
-            self.laps_buttons.pack_forget()
             return
 
         self.laps_hint.config(
             text=f"Найдено кругов: {len(all_laps)}. Отметьте интересные — неотмеченные будут скрыты на графиках.",
             foreground="grey"
         )
-        self.laps_buttons.pack(anchor=tk.W, pady=(5, 0))
 
-        # Таблица: строки по кругам, до 8 колонок с переносом
+        # Таблица: 6 фиксированных колонок, при нехватке места — прокрутка вниз
         for i, lap in enumerate(all_laps):
             var = tk.BooleanVar(value=True)   # по умолчанию все отмечены (= текущее поведение «все круги»)
             self._lap_vars[int(lap)] = var
-            row, col = divmod(i, 8)
+            row, col = divmod(i, 6)
             cell = ttk.Frame(self.laps_table)
             cell.grid(row=row, column=col, sticky=tk.W, padx=(0, 15), pady=2)
             ttk.Checkbutton(cell, text=f"Круг {int(lap)}", variable=var).pack(side=tk.LEFT)
             ttk.Label(cell, text=format_lap_time(lap_times.get(lap, float("nan"))),
                       foreground="grey").pack(side=tk.LEFT, padx=(4, 0))
+
+        self.root.update_idletasks()
+        self._on_laps_table_configure(None)
 
     def check_all_laps(self):
         for var in self._lap_vars.values():
@@ -267,7 +306,7 @@ class TelemetryApp:
             self.status_label.config(text=f"Готово! Отчет сохранен: {result.report_path}")
             messagebox.showinfo(
                 "Успех",
-                f"Анализ завершен!\nОтчет сохранен в файл:\n{result.report_path}\n\nВремена кругов:\n{result.laps_summary}"
+                f"Анализ завершен!\nОтчет сохранен в файл:\n{result.report_path}"
             )
         except (ValueError, FileNotFoundError, CarProfileError) as e:
             self.status_label.config(text="Ошибка!")
