@@ -22,7 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cd_a", type=float, default=None, help="Аэродинамическое сопротивление Cd*A (по умолчанию: из профиля --car, иначе 0.65)")
     parser.add_argument("--crr", type=float, default=None, help="Коэффициент сопротивления качению (по умолчанию: из профиля --car, иначе 0.012)")
     parser.add_argument("--r_wheel", type=float, default=None, help="Радиус колеса в метрах (по умолчанию: из профиля --car, иначе 0.288)")
-    parser.add_argument("--efficiency", type=float, default=None, help="КПД трансмиссии (0.90 = 90%; по умолчанию: из профиля --car, иначе 0.90)")
+    # %% экранирован: argparse подставляет параметры через %-форматирование
+    parser.add_argument("--efficiency", type=float, default=None, help="КПД трансмиссии (0.90 = 90%%; по умолчанию: из профиля --car, иначе 0.90)")
     parser.add_argument("--gear_ratio", type=float, default=None, help="Передаточное число КПП * Главная пара (для расчета момента двигателя; по умолчанию: из профиля --car, иначе 0)")
     parser.add_argument("--smooth_time", type=float, default=0.8, help="Окно сглаживания в СЕКУНДАХ (по умолчанию 0.8 сек)")
     parser.add_argument("--driver", type=str, default="Не указан", help="Имя пилота")

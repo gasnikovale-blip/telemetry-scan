@@ -132,3 +132,17 @@ def format_lap_time(t) -> str:
     if minutes > 0:
         return f"{minutes}:{seconds:06.3f}"
     return f"{seconds:.3f} сек"
+
+
+def format_lap_time_fixed(t) -> str:
+    """Время круга одной ширины 'M:SS.mmm' ('0:03.997', '1:59.477') для таблицы GUI.
+
+    Без единиц и длинных прочерков: в моноширинной колонке с выравниванием вправо
+    разделители минут/секунд/долей выстраиваются по вертикали.
+    Неполный круг (NaN, отрицательное) — '—'.
+    """
+    if pd.isna(t) or t < 0:
+        return "—"
+    minutes = int(t // 60)
+    seconds = t % 60
+    return f"{minutes}:{seconds:06.3f}"
