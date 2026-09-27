@@ -20,8 +20,10 @@ def run_analysis(cfg: AnalysisConfig,
     """Полный цикл анализа: чтение -> круги -> физика -> графики -> PDF-отчет.
 
     progress — необязательный callback для сообщений о ходе выполнения
-    (CLI передает print, GUI не передает ничего).
-    Фигуры matplotlib всегда закрываются после сохранения отчета.
+    (CLI передает print, GUI — обновление статус-бара).
+    Показ окон графиков управляется cfg.show_plots; при блокирующем показе
+    (cfg.plot_show_block, CLI) фигуры закрываются после закрытия окон,
+    при неблокирующем (GUI) остаются открытыми.
     """
     def say(msg: str):
         if progress:
@@ -59,7 +61,7 @@ def run_analysis(cfg: AnalysisConfig,
     add_physics_columns(df, cfg)
 
     result = AnalysisResult(
-        report_path=report_path_for(cfg.file_path),
+        report_path=report_path_for(cfg.file_path, cfg.report_name),
         laps=laps,
         lap_times=lap_times,
         laps_summary=laps_summary,
@@ -70,16 +72,18 @@ def run_analysis(cfg: AnalysisConfig,
         smooth_window=smoothing.smooth_window,
     )
 
-    # Графики и PDF; фигуры закрываются в любом случае
+    # Графики и PDF; при блокирующем показе (CLI) фигуры закрываются сами,
+    # при неблокирующем (GUI) окна остаются открытыми до закрытия пользователем
     say(f"📄 Генерация PDF-отчета: {result.report_path}...")
     figs = build_figures(df, laps, cfg)
     try:
         save_pdf_report(figs, result, cfg)
         say(f"✅ Отчет успешно сохранен в файл: {result.report_path}")
         if cfg.show_plots:
-            plt.show()
+            plt.show(block=cfg.plot_show_block)
     finally:
-        for fig in figs:
-            plt.close(fig)
+        if not cfg.show_plots or cfg.plot_show_block:
+            for fig in figs:
+                plt.close(fig)
 
     return result

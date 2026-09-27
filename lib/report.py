@@ -9,8 +9,6 @@ import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
 from .config import AnalysisConfig, AnalysisResult
-from .paths import report_path_for
-
 PAGE_SIZE = (8.27, 11.69)   # A4, титульный лист
 
 
@@ -66,7 +64,7 @@ def build_report_text(result: AnalysisResult, cfg: AnalysisConfig) -> str:
 
 def save_pdf_report(figs: List, result: AnalysisResult, cfg: AnalysisConfig) -> Path:
     """Собирает PDF: титульный лист + все графики. Возвращает путь к файлу."""
-    path = report_path_for(cfg.file_path)
+    path = result.report_path   # единый источник: report_path_for уже учла report_name
 
     with PdfPages(path) as pdf:
         fig_text, ax_text = plt.subplots(figsize=PAGE_SIZE)

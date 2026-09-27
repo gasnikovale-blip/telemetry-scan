@@ -27,7 +27,9 @@ class AnalysisConfig:
     track: str = "Автодром Санкт-Петербург"
     weather: str = "Сухо"
     car_label: str = "вручную (без профиля)"   # готовая строка для PDF и консоли
-    show_plots: bool = False                    # показывать окна графиков (только CLI)
+    report_name: str = ""                       # имя PDF-отчета; пусто = автоимя со штампом времени
+    show_plots: bool = False                    # показывать окна графиков после анализа
+    plot_show_block: bool = True                # True = ждать закрытия окон (CLI), False = не блокировать (GUI)
 
     def __post_init__(self):
         if self.mass <= 0:

@@ -1,8 +1,12 @@
 """Построение графиков телеметрии (5 фигур matplotlib)."""
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 from typing import List
 
+import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -25,6 +29,47 @@ POWER_CLIP = (0, 400)      # л.с., защита от выбросов при �
 TORQUE_CLIP = (-100, 400)  # Нм
 
 GRID_KWARGS = dict(which="both", linestyle="--", linewidth=0.5, alpha=0.7)
+
+_HIDPI_APPLIED = False
+
+
+def _apply_hidpi_scale():
+    """Поднимает dpi фигур до реального масштаба экрана, если бэкенд сам этого не умеет.
+
+    Tk-бэкенд всегда рисует при 100 dpi и не знает о HiDPI — шрифты на графиках
+    выглядят мельче, чем в остальной системе. Qt-бэкенды масштабируются сами,
+    поэтому им корректировка не нужна. Применяется один раз за процесс.
+    """
+    global _HIDPI_APPLIED
+    if _HIDPI_APPLIED:
+        return
+    _HIDPI_APPLIED = True
+    if "tk" not in matplotlib.get_backend().lower():
+        return
+    scale = 1.0
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+            scale = dpi / 96.0 if dpi else 1.0
+        else:
+            # Linux: fontconfig масштабирует шрифты по ресурсу Xft.dpi (обычно 192
+            # на HiDPI), сам X-сервер при этом может сообщать ~98 dpi
+            out = subprocess.run(["xprop", "-root", "RESOURCE_MANAGER"],
+                                 capture_output=True, text=True, timeout=2).stdout
+            m = re.search(r"Xft\.dpi:\D*(\d+)", out)
+            if m:
+                scale = float(m.group(1)) / 96.0
+    except (OSError, subprocess.SubprocessError):
+        pass
+    scale = min(max(scale, 1.0), 3.0)
+    matplotlib.rcParams["figure.dpi"] = int(round(100 * scale))
+
+
+def build_figures(df: pd.DataFrame, laps: List, cfg: AnalysisConfig) -> List:
+    """Строит 4 фигуры (скорость, ускорения, G-G, мощность) + момент при gear_ratio > 0."""
+    _apply_hidpi_scale()
+    figs = []
 
 
 def make_legend_interactive(fig, ax) -> None:
