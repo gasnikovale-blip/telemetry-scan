@@ -4,14 +4,19 @@
 Внешний вид: встроенная тема 'clam' с ручной настройкой стилей (без сторонних пакетов).
 """
 import math
+import os
+import queue
+import re
 import statistics
+import subprocess
+import sys
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
 from car_profile import MANUAL, CarProfileError, list_car_profiles, load_car_profile
-from lib import AnalysisConfig, run_analysis
 from lib.telemetry_io import compute_lap_times, format_lap_time_fixed, read_telemetry
 
 
@@ -59,6 +64,7 @@ class TelemetryApp:
         self.driver = tk.StringVar()
         self.track = tk.StringVar(value="Автодром Санкт-Петербург")
         self.weather = tk.StringVar(value="Сухо")
+        self.report_name = tk.StringVar()   # пусто = автоимя Отчет_<имя файла>_<дата_время>.pdf
 
         # Таблица кругов (заполняется после выбора файла)
         self._lap_checked = {}   # номер круга -> отмечен ли
@@ -72,6 +78,15 @@ class TelemetryApp:
         self.car_var = tk.StringVar(value=MANUAL)
         self._profile_map = {}          # отображаемое имя -> путь к .ini
         self._loading_profile = False   # защита от срабатывания trace при загрузке профиля
+
+        # Анализ запускается отдельным процессом (telemetry_analyzer.py):
+        # окна графиков получают тот же бэкенд и масштаб, что и из консоли,
+        # а главный поток GUI не замирает на время расчета
+        self._cli_proc = None           # текущий subprocess анализа
+        self._cli_queue = queue.Queue() # строки вывода процесса -> статус-бар
+        self._cli_lines = []            # последние строки вывода (для сообщений об ошибках)
+        self._last_report_path = ""
+        self._analysis_phase = False    # True пока идет расчет (до сохранения отчета)
 
         self.build_ui()
 
@@ -199,12 +214,17 @@ class TelemetryApp:
         self._build_car_group(left_col)
         self._build_laps_group(columns)
 
-        # Нижняя панель: главная кнопка + статус всегда на виду
+        # Нижняя панель: имя отчета + главная кнопка, статус всегда на виду
         bottom = ttk.Frame(main_frame)
         bottom.pack(fill=tk.X, pady=(12, 0))
-        run_btn = ttk.Button(bottom, text="Анализировать и построить графики",
+        action_row = ttk.Frame(bottom)
+        action_row.pack(fill=tk.X)
+        ttk.Label(action_row, text="Имя отчета (пусто = автоимя):").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Entry(action_row, textvariable=self.report_name, width=16).pack(side=tk.LEFT, padx=(0, 16))
+        run_btn = ttk.Button(action_row, text="Анализировать",
                              style="Accent.TButton", command=self.run_analysis)
-        run_btn.pack()
+        self.run_btn = run_btn
+        run_btn.pack(side=tk.LEFT)
         self.status_label = ttk.Label(bottom, text="Готово к работе", style="Status.TLabel")
         self.status_label.pack(pady=(6, 0))
 
@@ -567,13 +587,19 @@ class TelemetryApp:
         return [lap for lap, checked in self._lap_checked.items() if checked]
 
     def run_analysis(self):
+        """Запускает консольный анализатор отдельным процессом со всеми параметрами из формы.
+
+        Окна графиков при этом живут в процессе CLI — тот же бэкенд и тот же
+        масштаб экрана, что у консольного запуска; GUI не замирает на время расчета.
+        """
+        if self._analysis_phase:
+            messagebox.showwarning("Анализ уже идет", "Дождитесь завершения текущего анализа.")
+            return
+
         filepath = self.filepath.get()
         if not filepath:
             messagebox.showwarning("Ошибка", "Пожалуйста, выберите файл лога.")
             return
-
-        self.set_status("Анализирую данные... Это может занять несколько секунд.")
-        self.root.update()
 
         sel = self.car_var.get()
         laps = self.selected_laps()
@@ -581,30 +607,103 @@ class TelemetryApp:
             messagebox.showwarning("Ошибка", "Отметьте хотя бы один круг в таблице кругов.")
             return
         try:
-            cfg = AnalysisConfig(
-                file_path=filepath,
-                laps=laps,
-                mass=self._get_float(self.mass, "Масса (кг)"),
-                cd_a=self._get_float(self.cd_a, "Аэродинамика (Cd*A)"),
-                crr=self._get_float(self.crr, "Коэфф. качения (Crr)"),
-                r_wheel=self._get_float(self.r_wheel, "Радиус колеса (м)"),
-                efficiency=self._get_float(self.efficiency, "КПД трансмиссии (0-1)"),
-                gear_ratio=self._get_float(self.gear_ratio, "Передат. число (0=нет)"),
-                smooth_time=self._get_float(self.smooth_time, "Сглаживание (сек)"),
-                driver=self.driver.get(),
-                track=self.track.get(),
-                weather=self.weather.get(),
-                car_label=sel if sel != MANUAL and sel in self._profile_map else "вручную (без профиля)",
-            )
-            result = run_analysis(cfg)   # progress не передаем: GUI молчит
-            self.set_status(f"Готово! Отчет сохранен: {result.report_path}", "success")
-            messagebox.showinfo(
-                "Успех",
-                f"Анализ завершен!\nОтчет сохранен в файл:\n{result.report_path}"
-            )
-        except (ValueError, FileNotFoundError, CarProfileError) as e:
-            self.set_status(f"Ошибка: {e}", "error")
+            params = {
+                "mass": self._get_float(self.mass, "Масса (кг)"),
+                "cd_a": self._get_float(self.cd_a, "Аэродинамика (Cd*A)"),
+                "crr": self._get_float(self.crr, "Коэфф. качения (Crr)"),
+                "r_wheel": self._get_float(self.r_wheel, "Радиус колеса (м)"),
+                "efficiency": self._get_float(self.efficiency, "КПД трансмиссии (0-1)"),
+                "gear_ratio": self._get_float(self.gear_ratio, "Передат. число (0=нет)"),
+                "smooth_time": self._get_float(self.smooth_time, "Сглаживание (сек)"),
+            }
+        except ValueError as e:
             messagebox.showerror("Ошибка анализа", str(e))
+            return
+
+        cli = Path(__file__).resolve().parent / "telemetry_analyzer.py"
+        cmd = [sys.executable, str(cli), filepath]
+        if laps is not None:
+            cmd += ["--laps", *[str(int(lap)) for lap in laps]]
+        if sel != MANUAL and sel in self._profile_map:
+            cmd += ["--car", str(self._profile_map[sel])]
+        # mass в CLI целая; остальные — дробные
+        cmd += ["--mass", f"{params['mass']:.0f}"]
+        for flag in ("cd_a", "crr", "r_wheel", "efficiency", "gear_ratio", "smooth_time"):
+            cmd += [f"--{flag}", str(params[flag])]
+        cmd += ["--driver", self.driver.get() or "Не указан",
+                "--track", self.track.get() or "Не указана",
+                "--weather", self.weather.get() or "Не указана"]
+        report = self.report_name.get().strip()
+        if report:
+            cmd += ["--report", report]
+
+        # PYTHONIOENCODING: в Windows-пайпе эмодзи и кириллица иначе падают на cp866;
+        # PYTHONUNBUFFERED: без него stdout дочернего процесса буферизуется и
+        # статус-бар не видит стадии анализа
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+        popen_kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        try:
+            self._cli_proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=env, **popen_kwargs,
+            )
+        except OSError as e:
+            messagebox.showerror("Ошибка анализа", f"Не удалось запустить анализатор: {e}")
+            return
+
+        self._cli_lines = []
+        self._last_report_path = ""
+        self._analysis_phase = True   # до сохранения отчета; дальше процесс лишь держит окна графиков
+        self.run_btn.state(["disabled"])
+        self.set_status("Запуск анализа...")
+        threading.Thread(target=self._read_cli_output, daemon=True).start()
+        self.root.after(100, self._poll_cli_output)
+
+    def _read_cli_output(self):
+        """Фоновый поток: перекачивает вывод процесса анализа в очередь для GUI-потока."""
+        for line in self._cli_proc.stdout:
+            self._cli_queue.put(line)
+        self._cli_queue.put(("exit", self._cli_proc.wait()))
+
+    def _poll_cli_output(self):
+        """Забирает строки вывода из очереди в статус-бар (только главный поток Tk)."""
+        try:
+            item = self._cli_queue.get_nowait()
+        except queue.Empty:
+            delay = 150
+        else:
+            delay = 30   # очередь не пуста — качаем быстрее
+            if isinstance(item, tuple) and item[0] == "exit":
+                self._finish_analysis(item[1])
+            else:
+                text = " ".join(re.sub(r"^[^\wА-Яа-яЁё]+", "", item.strip()).split())
+                if text:
+                    self._cli_lines.append(text)
+                    self.set_status(text)
+                    if "Отчет успешно сохранен в файл:" in text:
+                        # отчет готов раньше, чем пользователь закроет окна графиков:
+                        # считаем анализ завершенным сразу
+                        self._last_report_path = text.rsplit("файл:", 1)[1].strip()
+                        self._analysis_phase = False
+                        self.run_btn.state(["!disabled"])
+                        self.set_status(f"Готово! Отчет сохранен: {self._last_report_path}", "success")
+                        messagebox.showinfo(
+                            "Успех",
+                            f"Анализ завершен!\nОтчет сохранен в файл:\n{self._last_report_path}\n\n"
+                            "Окна графиков можно оставить открытыми и закрыть позже."
+                        )
+        self.root.after(delay, self._poll_cli_output)
+
+    def _finish_analysis(self, code):
+        """Процесс анализа завершился (окна графиков закрыты) или упал до отчета."""
+        self._analysis_phase = False
+        self.run_btn.state(["!disabled"])
+        self._cli_proc = None
+        if code != 0 and not self._last_report_path:
+            err = " ".join(" ".join(self._cli_lines[-3:]).split()) or f"код завершения {code}"
+            self.set_status(f"Ошибка анализа: {err}", "error")
+            messagebox.showerror("Ошибка анализа", err)
 
 
 if __name__ == "__main__":
