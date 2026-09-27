@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--driver", type=str, default="Не указан", help="Имя пилота")
     parser.add_argument("--track", type=str, default="Автодром Санкт-Петербург", help="Название трассы")
     parser.add_argument("--weather", type=str, default="Сухо", help="Погодные условия")
+    parser.add_argument("--report", type=str, default=None, help="Имя файла PDF-отчета (сохраняется в папке reports/). По умолчанию: Отчет_<имя файла>_<дата_время>.pdf")
     return parser
 
 
@@ -66,6 +67,7 @@ def main(argv=None) -> int:
             track=args.track,
             weather=args.weather,
             car_label=compose_car_label(car, args),
+            report_name=args.report or "",
             show_plots=True,
         )
         run_analysis(cfg, progress=print)
